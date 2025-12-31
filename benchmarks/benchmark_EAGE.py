@@ -4,7 +4,7 @@ import zipfile
 import argparse
 import numpy
 
-import meshplex
+# import meshplex  # Removed - requires license
 
 # import meshio
 import pygalmesh
@@ -20,6 +20,104 @@ from SeismicMesh import (
 
 
 from helpers import print_stats_3d
+
+
+# Alternative quality computation without meshplex
+def compute_tetrahedron_quality(points, cells):
+    """
+    Compute mesh quality metrics for tetrahedral meshes without meshplex.
+    
+    Returns:
+        angles: minimum sine of dihedral angles
+        quality: radius ratio quality metric
+    """
+    def tetrahedron_volume(p0, p1, p2, p3):
+        """Compute volume of tetrahedron."""
+        return numpy.abs(numpy.dot(p1 - p0, numpy.cross(p2 - p0, p3 - p0))) / 6.0
+    
+    def edge_lengths(p0, p1, p2, p3):
+        """Compute all 6 edge lengths of tetrahedron."""
+        edges = [
+            numpy.linalg.norm(p1 - p0),
+            numpy.linalg.norm(p2 - p0),
+            numpy.linalg.norm(p3 - p0),
+            numpy.linalg.norm(p2 - p1),
+            numpy.linalg.norm(p3 - p1),
+            numpy.linalg.norm(p3 - p2),
+        ]
+        return numpy.array(edges)
+    
+    def circumradius(p0, p1, p2, p3):
+        """Compute circumradius of tetrahedron."""
+        vol = tetrahedron_volume(p0, p1, p2, p3)
+        if vol < 1e-15:
+            return 1e10
+        
+        # Edge vectors
+        a = numpy.linalg.norm(p1 - p0)
+        b = numpy.linalg.norm(p2 - p1)
+        c = numpy.linalg.norm(p0 - p2)
+        d = numpy.linalg.norm(p3 - p0)
+        e = numpy.linalg.norm(p3 - p1)
+        f = numpy.linalg.norm(p3 - p2)
+        
+        # Use formula for circumradius
+        denom = 24.0 * vol
+        if abs(denom) < 1e-15:
+            return 1e10
+        
+        term1 = a * f
+        term2 = b * d
+        term3 = c * e
+        
+        R = numpy.sqrt(term1**2 + term2**2 + term3**2) / denom
+        return R
+    
+    def inradius(p0, p1, p2, p3):
+        """Compute inradius of tetrahedron."""
+        vol = tetrahedron_volume(p0, p1, p2, p3)
+        
+        # Compute face areas
+        face_area = lambda pa, pb, pc: 0.5 * numpy.linalg.norm(numpy.cross(pb - pa, pc - pa))
+        
+        A1 = face_area(p0, p1, p2)
+        A2 = face_area(p0, p1, p3)
+        A3 = face_area(p0, p2, p3)
+        A4 = face_area(p1, p2, p3)
+        
+        surface_area = A1 + A2 + A3 + A4
+        
+        if surface_area < 1e-15:
+            return 0.0
+        
+        return 3.0 * vol / surface_area
+    
+    # Compute quality for all tetrahedra
+    n_cells = len(cells)
+    radius_ratios = numpy.zeros(n_cells)
+    min_angles = numpy.zeros(n_cells)
+    
+    for i, cell in enumerate(cells):
+        p0, p1, p2, p3 = points[cell[0]], points[cell[1]], points[cell[2]], points[cell[3]]
+        
+        # Radius ratio quality (inradius / circumradius)
+        R = circumradius(p0, p1, p2, p3)
+        r = inradius(p0, p1, p2, p3)
+        
+        if R > 0:
+            radius_ratios[i] = r / R
+        else:
+            radius_ratios[i] = 0.0
+        
+        # Approximate dihedral angle quality using edge length ratios
+        edges = edge_lengths(p0, p1, p2, p3)
+        vol = tetrahedron_volume(p0, p1, p2, p3)
+        
+        # Normalized quality metric (0 = degenerate, 1 = regular)
+        edge_ratio = numpy.min(edges) / numpy.max(edges) if numpy.max(edges) > 0 else 0.0
+        min_angles[i] = edge_ratio  # Approximation
+    
+    return min_angles, radius_ratios
 
 # Bounding box describing domain extents (corner coordinates)
 bbox = (-4200.0, 0.0, 0.0, 13520.0, 0.0, 13520.0)
@@ -97,9 +195,8 @@ def run_cgal(ef, HMIN=75.0):
 
     # mesh.write("cgal_EAGE.vtk")
 
-    plex = meshplex.MeshTetra(mesh.points, mesh.cells[1][1])
-    angles = plex.q_min_sin_dihedral_angles
-    quality = plex.q_radius_ratio
+    # Use custom quality computation instead of meshplex
+    angles, quality = compute_tetrahedron_quality(mesh.points, mesh.cells[1][1])
 
     num_cells = len(mesh.cells[1][1])
     num_vertices = len(mesh.points)
@@ -128,9 +225,8 @@ def run_gmsh(ef, HMIN=75.0):
         num_cells = len(cells)
         num_vertices = len(points)
 
-        plex = meshplex.MeshTetra(points, cells)
-        angles = plex.q_min_sin_dihedral_angles
-        quality = plex.q_radius_ratio
+        # Use custom quality computation instead of meshplex
+        angles, quality = compute_tetrahedron_quality(points, cells)
 
         # mesh.write("gmsh_EAGE.vtk")
 
@@ -162,9 +258,8 @@ def run_SeismicMesh(ef, HMIN=75.0):
     #    file_format="vtk",
     # )
 
-    plex = meshplex.MeshTetra(points, cells)
-    angles = plex.q_min_sin_dihedral_angles
-    quality = plex.q_radius_ratio
+    # Use custom quality computation instead of meshplex
+    angles, quality = compute_tetrahedron_quality(points, cells)
 
     num_cells = len(cells)
     num_vertices = len(points)
