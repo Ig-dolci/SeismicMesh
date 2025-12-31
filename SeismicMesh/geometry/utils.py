@@ -154,8 +154,8 @@ def unique_rows(A, return_index=False, return_inverse=False):
 
     orig_dtype = A.dtype
     ncolumns = A.shape[1]
-    dtype = np.dtype(f'S{orig_dtype.itemsize * ncolumns}')
-    # np.dtype((np.character, orig_dtype.itemsize * ncolumns))
+    # Fix for NumPy 2.x compatibility - use bytes_ instead of character
+    dtype = np.dtype((np.bytes_, orig_dtype.itemsize * ncolumns))
     B, I, J = np.unique(A.view(dtype), return_index=True, return_inverse=True)
     J = J.flatten()
 

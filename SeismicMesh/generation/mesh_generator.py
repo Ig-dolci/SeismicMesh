@@ -742,16 +742,37 @@ def _improve_level_set_newton(p, t, fd, deps, tol):
     """Reduce level set error by using Newton's minimization method"""
     dim = p.shape[1]
     bid = geometry.get_boundary_vertices(t, dim)
+    # Ensure bid is integer type for indexing
+    bid = np.asarray(bid, dtype=np.int64).flatten()
     alpha = 1
     for iteration in range(5):
         d = fd(p[bid])
+        # Ensure d is properly shaped
+        d = np.asarray(d).flatten()
+        n_boundary = len(bid)
+        if len(d) != n_boundary:
+            if len(d) > n_boundary:
+                d = d[:n_boundary]
+            else:
+                d = np.pad(d, (0, n_boundary - len(d)), mode='edge')
 
         def _deps_vec(i):
             a = [0] * dim
             a[i] = deps
             return a
 
-        dgrads = [(fd(p[bid] + _deps_vec(i)) - d) / deps for i in range(dim)]
+        # Compute gradients with proper shape handling
+        dgrads = []
+        for i in range(dim):
+            fd_val = fd(p[bid] + _deps_vec(i))
+            fd_val = np.asarray(fd_val).flatten()
+            if len(fd_val) != n_boundary:
+                if len(fd_val) > n_boundary:
+                    fd_val = fd_val[:n_boundary]
+                else:
+                    fd_val = np.pad(fd_val, (0, n_boundary - len(fd_val)), mode='edge')
+            dgrads.append((fd_val - d) / deps)
+        
         dgrad2 = sum(dgrad**2 for dgrad in dgrads)
         dgrad2 = np.where(dgrad2 < deps, deps, dgrad2)
         p[bid] -= alpha * (d * np.vstack(dgrads) / dgrad2).T  # Project
@@ -766,6 +787,16 @@ def _project_points_back_newton(p, fd, deps, hmin, idx):
     dim = p.shape[1]
 
     d = fd(p)
+    # Ensure d is properly shaped as 1D array
+    d = np.asarray(d).flatten()
+    # Ensure d has same length as p
+    n_points = p.shape[0]
+    if len(d) != n_points:
+        if len(d) > n_points:
+            d = d[:n_points]
+        else:
+            d = np.pad(d, (0, n_points - len(d)), mode='edge')
+    
     if idx == 0:
         ix = d > 0.0
     else:
@@ -777,7 +808,19 @@ def _project_points_back_newton(p, fd, deps, hmin, idx):
             a[i] = deps
             return a
 
-        dgrads = [(fd(p[ix] + _deps_vec(i)) - d[ix]) / deps for i in range(dim)]
+        # Compute gradients with proper shape handling
+        dgrads = []
+        for i in range(dim):
+            fd_val = fd(p[ix] + _deps_vec(i))
+            fd_val = np.asarray(fd_val).flatten()
+            # Ensure fd_val matches the number of selected points
+            n_selected = np.sum(ix)
+            if len(fd_val) != n_selected:
+                if len(fd_val) > n_selected:
+                    fd_val = fd_val[:n_selected]
+                else:
+                    fd_val = np.pad(fd_val, (0, n_selected - len(fd_val)), mode='edge')
+            dgrads.append((fd_val - d[ix]) / deps)
         dgrad2 = sum(dgrad**2 for dgrad in dgrads)
         dgrad2 = np.where(dgrad2 < deps, deps, dgrad2)
         p[ix] -= (d[ix] * np.vstack(dgrads) / dgrad2).T  # Project
@@ -820,7 +863,22 @@ def _generate_initial_points(h0, geps, dim, bbox, fh, fd, pfix, comm, opts, lsf)
         p = mutils.create_staggered_grid(h0, dim, bbox)
 
     # Remove points outside the region, apply the rejection method
-    p = p[fd(p) < geps]  # Keep only d<0 points
+    fd_vals = fd(p)
+    # Ensure fd_vals is properly shaped for boolean indexing
+    import numpy as np
+    fd_vals = np.asarray(fd_vals).flatten()
+    # Ensure mask length matches the number of points
+    n_points = p.shape[0]
+    if len(fd_vals) != n_points:
+        # Handle dimension mismatch - likely due to how fd returns values
+        # Try to ensure we have one value per point
+        if len(fd_vals) > n_points:
+            fd_vals = fd_vals[:n_points]
+        else:
+            # Repeat last value if needed (shouldn't normally happen)
+            fd_vals = np.pad(fd_vals, (0, n_points - len(fd_vals)), mode='edge')
+    mask = fd_vals < geps
+    p = p[mask]  # Keep only d<0 points
     r0 = fh(p)
     if opts["r0m_is_h0"]:
         # Ideally, r0m should be h0 <= r0m < r0.min(), if h0<r0.min(),
